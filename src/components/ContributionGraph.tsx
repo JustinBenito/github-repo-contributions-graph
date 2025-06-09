@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {  } from 'react';
 import { ContributionYear } from '../types';
 import { formatDate, getMonthLabels } from '../utils/dateUtils';
 import { colors } from '../utils/colors';
@@ -10,11 +10,12 @@ interface ContributionGraphProps {
   onDownload?: () => void;
 }
 
-const ContributionGraph: React.FC<ContributionGraphProps> = ({
-  contributionYear,
-  isGeneratingImage = false,
-  onDownload
-}) => {
+const ContributionGraph = React.forwardRef<HTMLDivElement, ContributionGraphProps>((
+  {
+    contributionYear,
+    isGeneratingImage = false,
+    onDownload
+  }, ref) => {
   const { weeks, totalContributions } = contributionYear;
   const monthLabels = getMonthLabels(weeks);
   
@@ -57,6 +58,7 @@ const ContributionGraph: React.FC<ContributionGraphProps> = ({
             opacity: 1,
             transform: 'none'
           }}
+          ref={ref}
         >
           <div className="flex flex-col">
             {/* Month labels */}
@@ -142,6 +144,6 @@ const ContributionGraph: React.FC<ContributionGraphProps> = ({
       </div>
     </div>
   );
-};
+});
 
 export default ContributionGraph;

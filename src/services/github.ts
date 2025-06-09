@@ -149,6 +149,44 @@ export const saveOrUpdateContributionData = async (
   console.log('Contribution data saved/updated successfully in Supabase.');
 };
 
+// Supabase Storage Integration
+export const uploadImageToSupabase = async (
+  imageBlob: Blob,
+  owner: string,
+  repo: string
+): Promise<string | null> => {
+  const filePath = `graphs/${owner}/${repo}-${Date.now()}.png`; // Unique path for each image
+
+  try {
+    const { error } = await supabase.storage
+      .from('contribution-graphs') // You'll need to create this bucket in Supabase
+      .upload(filePath, imageBlob, {
+        cacheControl: '3600',
+        upsert: false, // Do not upsert, create new file if it exists (due to Date.now() in path)
+      });
+
+    if (error) {
+      console.error('Error uploading image to Supabase Storage:', error);
+      throw error;
+    }
+
+    // Get the public URL
+    const { data: publicUrlData } = supabase.storage
+      .from('contribution-graphs')
+      .getPublicUrl(filePath);
+    
+    if (publicUrlData) {
+      console.log('Image uploaded to Supabase Storage:', publicUrlData.publicUrl);
+      return publicUrlData.publicUrl;
+    }
+    return null;
+
+  } catch (error) {
+    console.error('Error in uploadImageToSupabase:', error);
+    return null;
+  }
+};
+
 // Parse a GitHub URL to extract owner and repo
 export const parseGitHubUrl = (url: string): { owner: string, repo: string } | null => {
   try {

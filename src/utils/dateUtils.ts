@@ -182,7 +182,7 @@ export const getMonthLabels = (weeks: ContributionWeek[]): { label: string, colu
         const day = week.days[dayIndex];
         
         // Log the date string to debug "Dedan" or empty string issues
-        console.log(`Processing day.date: ${day.date}`);
+        //console.log(`Processing day.date: ${day.date}`);
 
         if (day.date) { // Only consider non-empty dates for actual month comparison
           const d = new Date(day.date);

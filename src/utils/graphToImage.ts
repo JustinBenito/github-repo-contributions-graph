@@ -1,26 +1,22 @@
 import { ContributionYear, Repository } from '../types';
-import { toPng } from 'html-to-image';
+import { toBlob } from 'html-to-image';
 
 // This is a simplified version of what would normally be a server-side image generation function
 // In a real application, this would use Canvas/SVG to render the graph and convert it to an image
 export const generateGraphImage = async (
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  repository: Repository,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  contributionYear: ContributionYear
-): Promise<string> => {
-  // Wait for the next render cycle to ensure the graph is fully rendered
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  element: HTMLElement
+): Promise<Blob | null> => {
+  // Ensure the element is rendered and ready for snapshotting
+  await new Promise(resolve => requestAnimationFrame(resolve));
 
-  // Find the contribution graph element
-  const graphElement = document.querySelector('.contribution-graph');
-  if (!graphElement) {
-    throw new Error('Contribution graph element not found');
+  if (!element) {
+    console.error('Contribution graph element not found');
+    return null;
   }
 
   try {
-    // Generate the image using html-to-image with improved settings
-    const dataUrl = await toPng(graphElement as HTMLElement, {
+    // Generate the image as a Blob using html-to-image with improved settings
+    const imageBlob = await toBlob(element, {
       backgroundColor: '#0d1117',
       pixelRatio: 2, // Higher quality
       quality: 1.0, // Maximum quality
@@ -35,9 +31,9 @@ export const generateGraphImage = async (
       }
     });
 
-    return dataUrl;
+    return imageBlob;
   } catch (error) {
-    console.error('Error generating image:', error);
-    throw new Error('Failed to generate image');
+    console.error('Error generating image Blob:', error);
+    return null;
   }
 };

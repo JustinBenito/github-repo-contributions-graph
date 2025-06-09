@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Header from './components/Header';
 import Footer from './components/Footer';
 import RepoForm from './components/RepoForm';
@@ -7,7 +7,7 @@ import ShareableImage from './components/ShareableImage';
 import Loading from './components/Loading';
 import Stats from './components/Stats';
 import { Repository, ContributionYear, ContributionData } from './types';
-import { getRepository, getContributions, getContributors } from './services/github';
+import { getRepository, getContributions, getContributors, uploadImageToSupabase } from './services/github';
 import { organizeContributionsIntoYear } from './utils/dateUtils';
 import { generateGraphImage } from './utils/graphToImage';
 import { supabase } from './lib/supabaseClient';
@@ -19,6 +19,38 @@ function App() {
   const [contributorsCount, setContributorsCount] = useState(0);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [hasAttemptedGeneration, setHasAttemptedGeneration] = useState(false);
+
+  const graphRef = useRef<HTMLDivElement>(null);
+
+  // Effect to generate and upload image once the graph is rendered
+  useEffect(() => {
+    const generateAndUpload = async () => {
+      if (repository && contributionYear && graphRef.current && !imageUrl && !isGeneratingImage && !hasAttemptedGeneration) {
+        console.log("useEffect: Starting image generation...");
+        setIsGeneratingImage(true);
+        setHasAttemptedGeneration(true);
+        
+        try {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          const imageBlob = await generateGraphImage(graphRef.current);
+          
+          if (imageBlob) {
+            const url = await uploadImageToSupabase(imageBlob, repository.owner, repository.name);
+            if (url) {
+              setImageUrl(url);
+            }
+          }
+        } catch (error) {
+          console.error('Error generating or uploading image:', error);
+        } finally {
+          setIsGeneratingImage(false);
+        }
+      }
+    };
+
+    generateAndUpload();
+  }, [repository, contributionYear]); // Only depend on these two values
 
   const handleRepoSubmit = async (owner: string, repo: string) => {
     setIsLoading(true);
@@ -26,6 +58,7 @@ function App() {
     setContributionYear(null);
     setImageUrl(null);
     setIsGeneratingImage(false);
+    setHasAttemptedGeneration(false); // Reset the generation flag
     
     const repoId = `${owner}-${repo}`;
     const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -91,24 +124,8 @@ function App() {
         setContributionYear(year);
         setContributorsCount(fetchedContributorsCount);
 
-        // Wait for the contribution graph to be rendered
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // The image generation will now be handled by the useEffect hook
 
-        // Generate image
-        setIsGeneratingImage(true);
-        try {
-          const url = await generateGraphImage(fetchedRepository, year);
-          if (url) {
-            setImageUrl(url);
-          } else {
-            throw new Error('Failed to generate image URL');
-          }
-        } catch (error) {
-          console.error('Error generating image:', error);
-          setImageUrl(null);
-        } finally {
-          setIsGeneratingImage(false);
-        }
       } else {
         throw new Error('Failed to retrieve repository or contribution data.');
       }
@@ -127,7 +144,7 @@ function App() {
       <Header />
       
       <main className="flex-grow container mx-auto px-4 py-8">
-        <div className="max-w-3xl mx-auto mb-12 text-center">
+        <div className="max-w-4xl mx-auto mb-12 text-center">
           <h1 className="text-3xl md:text-4xl font-bold mb-4 text-[#f0f6fc]">
             GitHub Contribution Graph Generator
           </h1>
@@ -157,8 +174,10 @@ function App() {
               </h2>
               <ContributionGraph 
                 contributionYear={contributionYear} 
+                ref={graphRef} // Attach the ref here
                 onDownload={async () => {
                   if (imageUrl) {
+                    console.log("Using existing image URL for download:", imageUrl);
                     const link = document.createElement('a');
                     link.href = imageUrl;
                     link.download = `${repository.fullName.replace('/', '-')}-contributions.png`;
@@ -166,23 +185,7 @@ function App() {
                     link.click();
                     document.body.removeChild(link);
                   } else {
-                    setIsGeneratingImage(true);
-                    try {
-                      const url = await generateGraphImage(repository, contributionYear);
-                      if (url) {
-                        setImageUrl(url);
-                        const link = document.createElement('a');
-                        link.href = url;
-                        link.download = `${repository.fullName.replace('/', '-')}-contributions.png`;
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                      }
-                    } catch (error) {
-                      console.error('Error generating image:', error);
-                    } finally {
-                      setIsGeneratingImage(false);
-                    }
+                    console.warn('Cannot download: Image URL not available in state and no fallback generation.');
                   }
                 }}
               />
@@ -205,7 +208,7 @@ function App() {
         )}
         
         {!isLoading && !repository && (
-          <div className="w-full max-w-3xl mx-auto mt-16 text-center">
+          <div className="w-full max-w-4xl mx-auto mt-16 text-center">
             <div className="p-8 bg-[#161b22] border border-[#30363d] rounded-lg">
               <p className="text-[#8b949e] text-lg">
                 Enter a GitHub repository URL above to generate a contribution graph.
