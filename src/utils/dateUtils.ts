@@ -4,6 +4,7 @@ import { getContributionIntensity } from './colors';
 // Get array of dates between start and end
 export const getDatesBetween = (startDate: string, endDate: string): string[] => {
   const dates: string[] = [];
+  // eslint-disable-next-line prefer-const
   let currentDate = new Date(startDate);
   const end = new Date(endDate);
   
@@ -48,92 +49,181 @@ export const organizeContributionsIntoYear = (
   contributions: Contribution[],
   maxContributions: number
 ): ContributionYear => {
-  // Create a map for quick lookup
   const contributionMap = new Map<string, number>();
-  contributions.forEach(contribution => {
-    contributionMap.set(contribution.date, contribution.count);
+  contributions.forEach(c => {
+    contributionMap.set(c.date, c.count);
   });
 
-  // Get the date range
-  const sortedDates = contributions
-    .map(c => c.date)
-    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Normalize to start of day
 
-  let startDate = sortedDates[0];
-  const endDate = sortedDates[sortedDates.length - 1];
+  // Calculate the true start of the graph: first Sunday on or before one year ago from today
+  const tempStartDate = new Date(today);
+  tempStartDate.setFullYear(tempStartDate.getFullYear() - 1);
+  tempStartDate.setDate(tempStartDate.getDate() + 1); // Start exactly one year ago + 1 day for 365 days
 
-  // Get the first Sunday before or on the start date
-  const startDay = getDayOfWeek(startDate);
-  if (startDay !== 0) {
-    const date = new Date(startDate);
-    date.setDate(date.getDate() - startDay);
-    startDate = date.toISOString().split('T')[0];
+  // eslint-disable-next-line prefer-const
+  let graphStartDate = new Date(tempStartDate);
+  const startDayOfWeek = graphStartDate.getDay(); // 0 for Sunday
+  if (startDayOfWeek !== 0) {
+    graphStartDate.setDate(graphStartDate.getDate() - startDayOfWeek);
   }
+  graphStartDate.setHours(0, 0, 0, 0);
 
-  // Generate all dates
-  const allDates = getDatesBetween(startDate, endDate);
+  // Calculate the true end of the graph: Saturday on or after today's date
+  // eslint-disable-next-line prefer-const
+  let graphEndDate = new Date(today);
+  const endDayOfWeek = graphEndDate.getDay(); // 6 for Saturday
+  if (endDayOfWeek !== 6) {
+    graphEndDate.setDate(graphEndDate.getDate() + (6 - endDayOfWeek));
+  }
+  graphEndDate.setHours(0, 0, 0, 0);
 
-  // Organize into weeks
+  // Generate all dates within this *exact* fixed period, ensuring it spans a full year + padding
+  const allDates = getDatesBetween(graphStartDate.toISOString().split('T')[0], graphEndDate.toISOString().split('T')[0]);
+
   const weeks: ContributionWeek[] = [];
-  let currentWeek: ContributionDay[] = [];
-  let weekNumber = 0;
+  let currentWeekDays: ContributionDay[] = [];
 
-  allDates.forEach((date, index) => {
-    const count = contributionMap.get(date) || 0;
+  allDates.forEach((dateString, index) => {
+    const count = contributionMap.get(dateString) || 0;
     const intensity = getContributionIntensity(count, maxContributions);
 
-    currentWeek.push({
-      date,
+    currentWeekDays.push({
+      date: dateString,
       count,
       intensity
     });
 
-    // Check if we completed a week or reached the end
-    if (getDayOfWeek(date) === 6 || index === allDates.length - 1) {
-      // If it's not a full week at the start, pad with empty days
-      while (currentWeek.length < 7) {
-        currentWeek.unshift({
-          date: '', // Empty date for padding
+    const currentDate = new Date(dateString);
+
+    // If it's Saturday OR the last day in the full date range, complete the week
+    if (currentDate.getDay() === 6 || index === allDates.length - 1) {
+      // Pad the start of the first week if necessary (should be handled by graphStartDate logic, but as a safeguard)
+      while (currentWeekDays.length < 7) {
+        currentWeekDays.unshift({
+          date: '',
           count: 0,
           intensity: 0
         });
       }
 
       weeks.push({
-        days: currentWeek,
-        weekNumber: weekNumber++
+        days: [...currentWeekDays],
+        weekNumber: weeks.length
       });
-      currentWeek = [];
+      currentWeekDays = [];
     }
   });
 
-  // Calculate total contributions
-  const totalContributions = contributions.reduce((sum, contrib) => sum + contrib.count, 0);
+  const totalContributionsFinal = contributions.reduce((sum, contrib) => sum + contrib.count, 0);
 
   return {
-    year: getYear(endDate),
+    year: today.getFullYear(),
     weeks,
-    totalContributions
+    totalContributions: totalContributionsFinal,
   };
 };
 
-// Extract month labels for the graph
-export const getMonthLabels = (weeks: ContributionWeek[]): { label: string, weekIndex: number }[] => {
-  const monthLabels: { label: string, weekIndex: number }[] = [];
-  const processedMonths = new Set<string>();
+// Extract month labels for the graph, ensuring all 12 months are represented
+export const getMonthLabels = (weeks: ContributionWeek[]): { label: string, columnPosition: number }[] => {
+  const monthLabels: { label: string, columnPosition: number }[] = [];
+  if (weeks.length === 0) return [];
 
-  weeks.forEach((week, weekIndex) => {
-    // Skip empty weeks or use the first valid day
-    const validDay = week.days.find(day => day.date !== '');
-    if (!validDay) return;
-
-    const monthName = getMonthName(validDay.date);
-    // Only add each month once
-    if (!processedMonths.has(monthName)) {
-      processedMonths.add(monthName);
-      monthLabels.push({ label: monthName, weekIndex });
+  // Get the overall start and end dates from the weeks array to define the graph span
+  // This ensures we cover the full year, including padded days if necessary
+  const firstValidDayOfGraph = weeks[0].days.find((d: ContributionDay) => d.date !== '');
+  
+  let lastValidDayOfGraph: ContributionDay | undefined;
+  // Manually find the last valid day of the graph to avoid findLast compatibility issues
+  for (let i = weeks.length - 1; i >= 0; i--) {
+    const week = weeks[i];
+    for (let j = week.days.length - 1; j >= 0; j--) {
+      const day = week.days[j];
+      if (day.date !== '') {
+        lastValidDayOfGraph = day;
+        break; // Found the last valid day, exit inner loop
+      }
     }
-  });
+    if (lastValidDayOfGraph) break; // Found the last valid day, exit outer loop
+  }
+
+  if (!firstValidDayOfGraph || !lastValidDayOfGraph) {
+    console.error("Invalid graph start or end date due to missing valid days in weeks array.");
+    return [];
+  }
+
+  const graphStartDate = new Date(firstValidDayOfGraph.date);
+  const graphEndDate = new Date(lastValidDayOfGraph.date);
+
+  if (isNaN(graphStartDate.getTime()) || isNaN(graphEndDate.getTime())) {
+    console.error("Invalid graph start or end date after initial check:", firstValidDayOfGraph.date, lastValidDayOfGraph.date);
+    return [];
+  }
+  console.log("Month Labels - Graph Start Date:", graphStartDate.toISOString());
+  console.log("Month Labels - Graph End Date:", graphEndDate.toISOString());
+
+  // eslint-disable-next-line prefer-const
+  let currentMonthIterator = new Date(graphStartDate.getFullYear(), graphStartDate.getMonth(), 1);
+
+  // Iterate through each month from the start of the graph to its end
+  while (currentMonthIterator <= graphEndDate || 
+         (currentMonthIterator.getFullYear() === graphEndDate.getFullYear() && currentMonthIterator.getMonth() === graphEndDate.getMonth())) {
+
+    const monthName = currentMonthIterator.toLocaleDateString('en-US', { month: 'short' });
+    let columnPositionForMonth = -1;
+
+    // Find the column position for the first day of this month within the entire grid
+    // We need to iterate through all days in all weeks to find the exact position.
+    let dayCount = 0;
+    for (let weekIndex = 0; weekIndex < weeks.length; weekIndex++) {
+      const week = weeks[weekIndex];
+      for (let dayIndex = 0; dayIndex < week.days.length; dayIndex++) {
+        const day = week.days[dayIndex];
+        
+        // Log the date string to debug "Dedan" or empty string issues
+        console.log(`Processing day.date: ${day.date}`);
+
+        if (day.date) { // Only consider non-empty dates for actual month comparison
+          const d = new Date(day.date);
+          if (isNaN(d.getTime())) {
+            console.error("Invalid date encountered while finding month position (inside loop):", day.date);
+            // Even if invalid, still count position to maintain grid alignment
+            dayCount++;
+            continue;
+          }
+
+          if (d.getFullYear() === currentMonthIterator.getFullYear() &&
+              d.getMonth() === currentMonthIterator.getMonth()) {
+            columnPositionForMonth = dayCount; // This is the exact column position
+            break; // Found the first day of this month, move to next month iteration
+          }
+        }
+        dayCount++; // IMPORTANT: Increment dayCount for every day in the grid, including padding days
+      }
+      if (columnPositionForMonth !== -1) break; // Break outer loop if month found
+    }
+
+    if (columnPositionForMonth !== -1) {
+      // Add the month label if it hasn't been added already for this month name
+      // Since we're iterating month by month, each month name should ideally be unique for the year.
+      const existingLabel = monthLabels.find(ml => ml.label === monthName);
+      if (!existingLabel) {
+        monthLabels.push({ label: monthName, columnPosition: columnPositionForMonth });
+        console.log(`Added label: ${monthName} at columnPosition: ${columnPositionForMonth}`);
+      }
+    } else {
+        console.log(`Could not find column position for month: ${monthName} (${currentMonthIterator.toISOString()})`);
+    }
+
+    // Move to the next month for iteration
+    currentMonthIterator.setMonth(currentMonthIterator.getMonth() + 1);
+  }
+
+  // Sort the month labels by their column position to ensure chronological order
+  monthLabels.sort((a, b) => a.columnPosition - b.columnPosition);
+
+  console.log("Final month labels:", monthLabels);
 
   return monthLabels;
 };

@@ -66,9 +66,9 @@ const ContributionGraph: React.FC<ContributionGraphProps> = ({
                 {monthLabels.map((month, i) => (
                   <span
                     key={i}
-                    className="absolute text-xs text-[#8b949e]"
+                    className="absolute text-xs text-[#8b949e] pr-2"
                     style={{
-                      left: `${(month.weekIndex / weeks.length) * 100}%`,
+                      left: `${(month.columnPosition / (weeks.length * 7)) * 100}%`,
                       transform: i === 0 ? 'translateX(0)' : 'translateX(-50%)',
                       whiteSpace: 'nowrap'
                     }}

@@ -6,10 +6,11 @@ import ContributionGraph from './components/ContributionGraph';
 import ShareableImage from './components/ShareableImage';
 import Loading from './components/Loading';
 import Stats from './components/Stats';
-import { Repository, ContributionYear } from './types';
+import { Repository, ContributionYear, ContributionData } from './types';
 import { getRepository, getContributions, getContributors } from './services/github';
 import { organizeContributionsIntoYear } from './utils/dateUtils';
 import { generateGraphImage } from './utils/graphToImage';
+import { supabase } from './lib/supabaseClient';
 
 function App() {
   const [isLoading, setIsLoading] = useState(false);
@@ -26,45 +27,93 @@ function App() {
     setImageUrl(null);
     setIsGeneratingImage(false);
     
+    const repoId = `${owner}-${repo}`;
+    const ONE_DAY_IN_MS = 24 * 60 * 60 * 1000; // 24 hours
+
     try {
-      // Fetch repository data
-      const repoData = await getRepository(`https://github.com/${owner}/${repo}`);
-      setRepository(repoData);
-      
-      // Fetch contribution data
-      const contributionData = await getContributions(repoData.fullName);
-      
-      // Transform contribution data for visualization
-      const year = organizeContributionsIntoYear(
-        contributionData.contributions,
-        contributionData.maxContributions
-      );
-      setContributionYear(year);
-      
-      // Fetch contributors
-      const contributors = await getContributors(repoData.fullName);
-      setContributorsCount(contributors.length);
-      
-      // Wait for the contribution graph to be rendered
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Generate image
-      setIsGeneratingImage(true);
-      try {
-        const url = await generateGraphImage(repoData, year);
-        if (url) {
-          setImageUrl(url);
-        } else {
-          throw new Error('Failed to generate image URL');
+      let fetchedRepository: Repository | null = null;
+      let fetchedContributionData: ContributionData | null = null;
+      let fetchedContributorsCount = 0;
+      let isDataFresh = false;
+
+      // 1. Try to fetch from Supabase cache
+      const { data: cachedData, error: cacheError } = await supabase
+        .from('contribution_graphs')
+        .select('repository_data, contribution_data, contributors_count, updated_at')
+        .eq('id', repoId)
+        .single();
+
+      if (cachedData && !cacheError) {
+        const updatedAt = new Date(cachedData.updated_at);
+        const now = new Date();
+        if (now.getTime() - updatedAt.getTime() < ONE_DAY_IN_MS) {
+          // Data is fresh
+          fetchedRepository = cachedData.repository_data;
+          fetchedContributionData = cachedData.contribution_data;
+          fetchedContributorsCount = cachedData.contributors_count;
+          isDataFresh = true;
+          console.log('Using cached data from Supabase.');
         }
-      } catch (error) {
-        console.error('Error generating image:', error);
-        setImageUrl(null);
-      } finally {
-        setIsGeneratingImage(false);
+      }
+
+      if (!isDataFresh) {
+        // 2. Fetch from GitHub API if cache is stale or not found
+        console.log('Fetching data from GitHub API...');
+        fetchedRepository = await getRepository(`https://github.com/${owner}/${repo}`);
+        const contributionResponse = await getContributions(fetchedRepository.fullName);
+        fetchedContributionData = contributionResponse;
+        const contributors = await getContributors(fetchedRepository.fullName);
+        fetchedContributorsCount = contributors.length;
+
+        // 3. Save to Supabase
+        if (fetchedRepository && fetchedContributionData) {
+          await supabase
+            .from('contribution_graphs')
+            .upsert({
+              id: repoId,
+              owner,
+              repo,
+              repository_data: fetchedRepository,
+              contribution_data: fetchedContributionData,
+              contributors_count: fetchedContributorsCount,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'id' });
+          console.log('Data saved/updated in Supabase.');
+        }
+      }
+
+      if (fetchedRepository && fetchedContributionData) {
+        setRepository(fetchedRepository);
+        const year = organizeContributionsIntoYear(
+          fetchedContributionData.contributions,
+          fetchedContributionData.maxContributions
+        );
+        setContributionYear(year);
+        setContributorsCount(fetchedContributorsCount);
+
+        // Wait for the contribution graph to be rendered
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Generate image
+        setIsGeneratingImage(true);
+        try {
+          const url = await generateGraphImage(fetchedRepository, year);
+          if (url) {
+            setImageUrl(url);
+          } else {
+            throw new Error('Failed to generate image URL');
+          }
+        } catch (error) {
+          console.error('Error generating image:', error);
+          setImageUrl(null);
+        } finally {
+          setIsGeneratingImage(false);
+        }
+      } else {
+        throw new Error('Failed to retrieve repository or contribution data.');
       }
     } catch (error) {
-      console.error('Error fetching repository data:', error);
+      console.error('Error in handleRepoSubmit:', error);
       setRepository(null);
       setContributionYear(null);
       setImageUrl(null);
@@ -78,7 +127,7 @@ function App() {
       <Header />
       
       <main className="flex-grow container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto mb-12 text-center">
+        <div className="max-w-3xl mx-auto mb-12 text-center">
           <h1 className="text-3xl md:text-4xl font-bold mb-4 text-[#f0f6fc]">
             GitHub Contribution Graph Generator
           </h1>
@@ -101,9 +150,8 @@ function App() {
               contributionYear={contributionYear}
               contributorsCount={contributorsCount}
             />
-            <div className="w-full max-w-4xl mx-auto mt-8 bg-[#161b22] border border-[#30363d] rounded-lg shadow-lg overflow-hidden">
-            <div className="p-6">
-            <div className="w-full max-w-4xl mx-auto">
+            
+            <div className="w-full max-w-3xl mx-auto mt-8">
               <h2 className="text-xl font-bold text-[#f0f6fc] mb-4">
                 Contribution Graph Preview
               </h2>
@@ -139,9 +187,7 @@ function App() {
                 }}
               />
             </div>
-            </div>
-            </div>
-
+            
             {isGeneratingImage && (
               <div className="w-full max-w-3xl mx-auto mt-8">
                 <Loading message="Generating shareable image..." />
@@ -159,7 +205,7 @@ function App() {
         )}
         
         {!isLoading && !repository && (
-          <div className="w-full max-w-4xl mx-auto mt-16 text-center">
+          <div className="w-full max-w-3xl mx-auto mt-16 text-center">
             <div className="p-8 bg-[#161b22] border border-[#30363d] rounded-lg">
               <p className="text-[#8b949e] text-lg">
                 Enter a GitHub repository URL above to generate a contribution graph.
