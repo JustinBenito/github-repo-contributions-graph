@@ -20,6 +20,7 @@ function App() {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [hasAttemptedGeneration, setHasAttemptedGeneration] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   const graphRef = useRef<HTMLDivElement>(null);
 
@@ -139,6 +140,95 @@ function App() {
     }
   };
 
+  const handleDownload = async () => {
+    if (!graphRef.current) {
+      console.error('Graph reference not found');
+      return;
+    }
+
+    try {
+      let imageBlob: Blob | null = null;
+      
+      // If we have a cached image URL, try to fetch it first
+      if (imageUrl) {
+        try {
+          const response = await fetch(imageUrl);
+          if (response.ok) {
+            imageBlob = await response.blob();
+          }
+        } catch (error) {
+          console.warn('Failed to fetch cached image, generating new one:', error);
+        }
+      }
+
+      // If we don't have a cached image or fetching failed, generate a new one
+      if (!imageBlob) {
+        imageBlob = await generateGraphImage(graphRef.current);
+      }
+
+      if (imageBlob) {
+        const url = URL.createObjectURL(imageBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `${repository?.owner}-${repository?.name}-contributions.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      console.error('Error downloading image:', error);
+    }
+  };
+
+  const handleCopyMarkdown = async () => {
+    if (!graphRef.current) {
+      console.error('Graph reference not found');
+      return;
+    }
+
+    try {
+      let finalImageUrl = imageUrl;
+
+      // If no image URL exists, generate and upload the image
+      if (!finalImageUrl) {
+        setIsGeneratingImage(true);
+        try {
+          const imageBlob = await generateGraphImage(graphRef.current);
+          if (imageBlob && repository) {
+            const url = await uploadImageToSupabase(imageBlob, repository.owner, repository.name);
+            if (url) {
+              finalImageUrl = url;
+              setImageUrl(url);
+            }
+          }
+        } catch (error) {
+          console.error('Error generating image:', error);
+          return;
+        } finally {
+          setIsGeneratingImage(false);
+        }
+      }
+
+      if (!finalImageUrl) {
+        console.error('Failed to get image URL');
+        return;
+      }
+
+      const markdownLink = `![${repository?.fullName} Contribution Graph](${finalImageUrl})`;
+      
+      try {
+        await navigator.clipboard.writeText(markdownLink);
+        setCopySuccess(true);
+        setTimeout(() => setCopySuccess(false), 2000);
+      } catch (error) {
+        console.error('Failed to copy markdown:', error);
+      }
+    } catch (error) {
+      console.error('Error in handleCopyMarkdown:', error);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0d1117] text-[#f0f6fc] flex flex-col">
       <Header />
@@ -172,22 +262,29 @@ function App() {
               <h2 className="text-xl font-bold text-[#f0f6fc] mb-4">
                 Contribution Graph Preview
               </h2>
+              <div className="flex justify-between items-center mb-4">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  Total Contributions: {contributionYear.totalContributions}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleDownload}
+                    className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                  >
+                    Download Graph
+                  </button>
+                  <button
+                    onClick={handleCopyMarkdown}
+                    className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
+                  >
+                    {copySuccess ? 'Copied!' : 'Copy Markdown'}
+                  </button>
+                </div>
+              </div>
               <ContributionGraph 
                 contributionYear={contributionYear} 
                 ref={graphRef} // Attach the ref here
-                onDownload={async () => {
-                  if (imageUrl) {
-                    console.log("Using existing image URL for download:", imageUrl);
-                    const link = document.createElement('a');
-                    link.href = imageUrl;
-                    link.download = `${repository.fullName.replace('/', '-')}-contributions.png`;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                  } else {
-                    console.warn('Cannot download: Image URL not available in state and no fallback generation.');
-                  }
-                }}
+                onDownload={handleDownload}
               />
             </div>
             
